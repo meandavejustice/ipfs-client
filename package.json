@@ -19,9 +19,13 @@
  "files": [
   "distribution"
  ],
+ "bin": {
+    "ipfs-client": "bin.js"
+  },
  "sideEffects": false,
  "license": "Apache-2.0",
  "dependencies": {
+  "cat": "^0.2.0",
   "is-ipfs": "^6.0.2",
   "ky": "^0.31.3",
   "lodash.orderby": "^4.6.0",

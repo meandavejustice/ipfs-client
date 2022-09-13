@@ -34,27 +34,28 @@ const myFileReadStream = await ipfsClient.createReadStream('cid');
 import ky from 'ky';
 import pMap from 'p-map'
 import memo from 'moize'
+import isIPFS from 'is-ipfs';
 import orderBy from 'lodash.orderby'
 import uniqBy from 'lodash.uniqby'
-import { cid, base32cid } from 'is-ipfs'
+// @ts-ignore
+import cat from 'cat';
+const { cid } = isIPFS;
 
 const MAX_CHECK_INTERVAL = 10000
 // QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn is used for health checking: https://github.com/ipfs/go-ipfs/pull/8429/files
 const TEST_CID = 'bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354'
+const DEFAULT_GATEWAY_LIST = [
+  { host: 'dweb.link', healthy: true, speed: 0 },
+  { host: 'cf-ipfs.com', healthy: true, speed: 0 }
+];
 
 export type Node = {
   host: string
-  remote: boolean
   healthy: boolean
-  speed?: number
+  speed: number
 }
 
-const DEFAULT_GATEWAY_LIST = [
-  { host: 'dweb.link', healthy: true, remote: true },
-  { host: 'cf-ipfs.com', healthy: true, remote: true }
-];
-
-export const transform = (url: string, node: Partial<Node>) => {
+export const transform = (url: string, node: Node) => {
   // support opening just a CID w/ no protocol
   // @ts-ignore
   if (cid(url) || cid(url.split('/')[0].split('?')[0])) url = `ipfs://${url}`
@@ -78,25 +79,22 @@ export const transform = (url: string, node: Partial<Node>) => {
     hostname = url.slice(start, hostname.length + start)
   }
 
-  const nodeProtocol = node.remote ? 'https' : 'http'
-
   if (protocol === 'ipfs:') {
-    return node.remote && base32cid(hostname)
-      ? `${nodeProtocol}://${hostname}.ipfs.${node.host}${pathname}${search}`
-      : `${nodeProtocol}://${node.host}/ipfs/${node.host}${pathname}${search}` // use paths on local
+    return `https://${hostname}.ipfs.${node.host}${pathname}${search}`
   }
+
   if (protocol === 'ipns:') {
     // use path as per https://github.com/ipfs/infra/issues/506#issuecomment-729850579
-    return `${nodeProtocol}://${node.host}/ipns/${hostname}${pathname}${search}`
+    return `https://${node.host}/ipns/${hostname}${pathname}${search}`
   }
 
   throw new Error(`Failed to transform URL: ${url}`)
 }
 
-const healthCheck = memo(async (remote: boolean, host: string, port?: number) => {
+const healthCheck = memo(async (host: string, speed: number) => {
   try {
     const start = Date.now()
-    const url = transform(`ipfs://${TEST_CID}?now=${Date.now()}`, { host, remote, healthy: true })
+    const url = transform(`ipfs://${TEST_CID}?now=${Date.now()}`, { host, healthy: true, speed })
 
     const res = await ky.get(url)
     // @ts-ignore
@@ -107,59 +105,49 @@ const healthCheck = memo(async (remote: boolean, host: string, port?: number) =>
   }
 }, { isPromise: true, isDeepEqual: true, maxAge: MAX_CHECK_INTERVAL, maxSize: 100 })
 
-const getNodeStatus = async (node: Partial<Node>): Promise<Node> => {
-  const { healthy, speed } = await healthCheck(node.remote!, node.host!)
+const getNodeStatus = async (node: Node): Promise<Node> => {
+  const { healthy, speed } = await healthCheck(node.host!, node.speed)
   return { ...node, healthy, speed } as Node
 }
 
-const getNodeList = async (nodes: Partial<Node>[]): Promise<Node[]> =>
+const getNodeList = async (nodes: Node[]): Promise<Node[]> =>
   pMap(nodes, getNodeStatus, { concurrency: 6 })
 
-const getRankedNodeList = memo((nodes: Partial<Node>[]) => {
-  const ranked = orderBy(uniqBy(nodes, 'host'), [ 'speed' ], 'asc').filter((node: Partial<Node>) => node.healthy)
+const getRankedNodeList = memo((nodes: Node[]) => {
+  const ranked = orderBy(uniqBy(nodes, 'host'), [ 'speed' ], 'asc').filter((node: Node) => node.healthy)
   return ranked.length === 0 ? [ DEFAULT_GATEWAY_LIST[0] ] : ranked
 }, {maxAge: MAX_CHECK_INTERVAL, maxSize: 100})
 
-type IpfsClientProps = {
-  chosenGateway: Partial<Node>;
-  gateways: Partial<Node>[];
-  gatewayCheckInterval: number;
+function catAsync(url: string) {
+  return new Promise(function(resolve, reject) {
+    cat(url, function(err: Error, data: any) {
+      if (err !== null) reject(err);
+      else resolve(data)
+    });
+  });
 }
 
 export default class IpfsClient {
-  public chosenGateway: Partial<Node>;
-  public gateways: Partial<Node>[];
-  public gatewayCheckInterval: number;
-
-  constructor({
-    gatewayCheckInterval = MAX_CHECK_INTERVAL / 2,
-    gateways,
-    chosenGateway
-  }: IpfsClientProps) {
-    this.gatewayCheckInterval = gatewayCheckInterval
-    this.gateways = gateways
-    this.chosenGateway = chosenGateway
-  }
+  chosenGateway = DEFAULT_GATEWAY_LIST[0];
+  gateways = DEFAULT_GATEWAY_LIST;
+  gatewayCheckInterval = MAX_CHECK_INTERVAL / 2;
 
   async init() {
-    if (!this.gateways) {
-      this.gateways = getRankedNodeList(await getNodeList(DEFAULT_GATEWAY_LIST))
-    }
-
-    if (!this.chosenGateway && this.gateways.length) {
-      this.chosenGateway = this.gateways[0]
-    }
+    this.gateways = getRankedNodeList(await getNodeList(DEFAULT_GATEWAY_LIST))
+    this.chosenGateway = this.gateways[0]
   }
 
-  open(url: string) {
-    return ky.get(transform(url, this.chosenGateway));
+  // open(url: string) {
+  //   console.log("Opening.... ", transform(url, this.chosenGateway));
+  //   return ky.get(transform(url, this.chosenGateway));
+  // }
+
+  async read(url: string) {
+    return await catAsync(transform(url, this.chosenGateway))
   }
 
-  read(url: string) {
-    return ky.get(transform(url, this.chosenGateway));
-  }
-
-  seek(url: string) {
-    return ky.get(transform(url, this.chosenGateway));
-  }
+  // seek(url: string) {
+  //   console.log("Seeking.... ", transform(url, this.chosenGateway));
+  //   return ky.get(transform(url, this.chosenGateway));
+  // }
 }
