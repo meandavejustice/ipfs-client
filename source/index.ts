@@ -46,7 +46,9 @@ const MAX_CHECK_INTERVAL = 10000
 const TEST_CID = 'bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354'
 const DEFAULT_GATEWAY_LIST = [
   { host: 'dweb.link', healthy: true, speed: 0 },
-  { host: 'cf-ipfs.com', healthy: true, speed: 0 }
+  { host: 'cf-ipfs.com', healthy: true, speed: 0 },
+  { host: 'w3s.link', healthy: true, speed: 0 },
+  { host: 'nftstorage.link', healthy: true, speed: 0 },
 ];
 
 export type Node = {
